@@ -2138,3 +2138,38 @@ input[type=range]::-webkit-slider-thumb {
   color: #4ade80;
   text-align: center;
 }
+
+/* ── Fingering overlays ───────────────────────────────────────────────────── */
+
+.sr-fingering-btn.active { color: #a78bfa; border-color: #a78bfa; }
+.sr-fingering-btn:disabled { opacity: 0.5; cursor: default; }
+
+@keyframes sr-fingering-spin {
+  to { transform: rotate(360deg); }
+}
+.sr-fingering-spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(167,139,250,0.3);
+  border-top-color: #a78bfa;
+  border-radius: 50%;
+  animation: sr-fingering-spin 0.7s linear infinite;
+}
+
+.sr-fingering-num {
+  position: absolute;
+  font-size: 9px;
+  font-weight: 800;
+  pointer-events: none;
+  transform: translateX(-50%) translateY(-115%);
+  line-height: 1;
+  color: #818cf8;
+  text-shadow: 0 0 3px rgba(0,0,0,0.7);
+  z-index: 20;
+  user-select: none;
+}
+
+.sr-fingering-num--left {
+  color: #34d399;
+}
