@@ -701,13 +701,17 @@ export default function SightReading() {
 
     playFromStepRef.current = stepIdx
 
-    // Move OSMD cursor
+    // Move OSMD cursor — suppress DOM side-effects during the walk
     const targetCursorIdx = steps[stepIdx].cursorIdx
+    const _siv = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = () => {}
+    try { osmd.cursor.hide() } catch (_) {}
     osmd.cursor.reset()
-    osmd.cursor.show()
     for (let i = 0; i < targetCursorIdx; i++) {
       try { osmd.cursor.next() } catch (_) {}
     }
+    Element.prototype.scrollIntoView = _siv
+    osmd.cursor.show()   // single scrollIntoView fires here, at the right position
 
     // If practice is active, restart from this step
     if (practiceActiveRef.current) {
