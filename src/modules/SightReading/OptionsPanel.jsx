@@ -17,10 +17,13 @@ export default function OptionsPanel({
   audioFx,     onAudioFx,
   pianoVol,    onPianoVol,
   metroVol,    onMetroVol,
+  metronome,   onMetronome,
   lastVel,
   dynMarkCount,
 }) {
-  const [tab, setTab] = useState(activeTab ?? 'keys')
+  const [tab,      setTab]      = useState(activeTab ?? 'keys')
+  const [soundTab, setSoundTab] = useState('volume')   // 'volume' | 'eq' | 'humanizer'
+
   useEffect(() => { if (activeTab) setTab(activeTab) }, [activeTab])
 
   const setV   = (key, val) => onVisualOpts({ ...visualOpts, [key]: val })
@@ -115,104 +118,133 @@ export default function OptionsPanel({
 
       {/* ═════ SOUND ════════════════════════════════════════════════════════ */}
       {tab === 'sound' && (<>
-        <div className="vopt-section-title">Volume</div>
-        <div className="vopt-row vopt-slider-row">
-          <div className="vopt-fx-label">
-            <span>🎹 Piano</span>
-            <span className="vopt-slider-val">{pianoVol ?? 88}</span>
-          </div>
-          <input type="range" min={0} max={100} step={1}
-            value={pianoVol ?? 88}
-            onChange={e => onPianoVol?.(Number(e.target.value))} />
-        </div>
-        <div className="vopt-row vopt-slider-row">
-          <div className="vopt-fx-label">
-            <span>♩ Metronome</span>
-            <span className="vopt-slider-val">{metroVol ?? 80}</span>
-          </div>
-          <input type="range" min={0} max={100} step={1}
-            value={metroVol ?? 80}
-            onChange={e => onMetroVol?.(Number(e.target.value))} />
+
+        {/* ── Sound sub-tabs ───────────────────────────────────────────── */}
+        <div className="vopt-row vopt-chip-row sr-sound-subtabs">
+          {['volume', 'eq', 'humanizer'].map(t => (
+            <button key={t}
+              className={`vopt-chip sr-sound-subtab-btn${soundTab === t ? ' active' : ''}`}
+              onClick={() => setSoundTab(t)}>
+              {t === 'eq' ? 'EQ' : t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
         </div>
 
-        <div className="vopt-section-title">Reverb</div>
-        <div className="vopt-row vopt-slider-row">
-          <div className="vopt-fx-label">
-            <span>Amount</span>
-            <span className="vopt-slider-val">{Math.round((fx.reverbAmt ?? 0.22) * 100)}%</span>
-          </div>
-          <input type="range" min={0} max={1} step={0.01}
-            value={fx.reverbAmt ?? 0.22}
-            onChange={e => setFx('reverbAmt', Number(e.target.value))} />
-        </div>
-        <div className="vopt-row vopt-slider-row">
-          <div className="vopt-fx-label">
-            <span>Decay</span>
-            <span className="vopt-slider-val">{(fx.reverbDecay ?? 2.5).toFixed(1)}s</span>
-          </div>
-          <input type="range" min={0.5} max={6} step={0.1}
-            value={fx.reverbDecay ?? 2.5}
-            onChange={e => setFx('reverbDecay', Number(e.target.value))} />
-        </div>
-
-        <div className="vopt-section-title">EQ — High shelf</div>
-        <div className="vopt-row vopt-slider-row">
-          <div className="vopt-fx-label">
-            <span>Presence</span>
-            <span className="vopt-slider-val">
-              {(fx.eqGain ?? 2) >= 0 ? '+' : ''}{(fx.eqGain ?? 2).toFixed(1)} dB
-            </span>
-          </div>
-          <input type="range" min={-12} max={12} step={0.5}
-            value={fx.eqGain ?? 2.0}
-            onChange={e => setFx('eqGain', Number(e.target.value))} />
-        </div>
-        <div className="vopt-row vopt-slider-row">
-          <div className="vopt-fx-label">
-            <span>Frequency</span>
-            <span className="vopt-slider-val">
-              {(fx.eqFreq ?? 3500) >= 1000
-                ? `${((fx.eqFreq ?? 3500) / 1000).toFixed(1)}kHz`
-                : `${fx.eqFreq ?? 3500}Hz`}
-            </span>
-          </div>
-          <input type="range" min={500} max={12000} step={100}
-            value={fx.eqFreq ?? 3500}
-            onChange={e => setFx('eqFreq', Number(e.target.value))} />
-        </div>
-
-        {!isMidi && (<>
-          <div className="vopt-section-title">Dynamic Markings</div>
+        {/* ── Volume ───────────────────────────────────────────────────── */}
+        {soundTab === 'volume' && (<>
+          <div className="vopt-section-title">Metronome</div>
           <label className="vopt-row vopt-check-row">
-            <input type="checkbox" checked={!!sOpts.dynamicMarks}
-              onChange={e => setS('dynamicMarks', e.target.checked)} />
-            <span>Use written dynamics (pp, mp, mf, f…)</span>
+            <input type="checkbox" checked={!!metronome}
+              onChange={e => onMetronome?.(e.target.checked)} />
+            <span>Enable metronome</span>
           </label>
+
+          <div className="vopt-section-title">Volume</div>
+          <div className="vopt-row vopt-slider-row">
+            <div className="vopt-fx-label">
+              <span>🎹 Piano</span>
+              <span className="vopt-slider-val">{pianoVol ?? 88}</span>
+            </div>
+            <input type="range" min={0} max={100} step={1}
+              value={pianoVol ?? 88}
+              onChange={e => onPianoVol?.(Number(e.target.value))} />
+          </div>
+          <div className="vopt-row vopt-slider-row">
+            <div className="vopt-fx-label">
+              <span>♩ Metronome</span>
+              <span className="vopt-slider-val">{metroVol ?? 80}</span>
+            </div>
+            <input type="range" min={0} max={100} step={1}
+              value={metroVol ?? 80}
+              onChange={e => onMetroVol?.(Number(e.target.value))} />
+          </div>
         </>)}
 
-        <div className="vopt-section-title">Humanizer</div>
-        <div className="vopt-row vopt-slider-row">
-          <div className="vopt-fx-label">
-            <span>Velocity variance</span>
-            <span className="vopt-slider-val">
-              {(soundO.humanizeAmt ?? 0) === 0 ? 'Off' : `±${soundO.humanizeAmt}`}
-            </span>
+        {/* ── EQ ───────────────────────────────────────────────────────── */}
+        {soundTab === 'eq' && (<>
+          <div className="vopt-section-title">Reverb</div>
+          <div className="vopt-row vopt-slider-row">
+            <div className="vopt-fx-label">
+              <span>Amount</span>
+              <span className="vopt-slider-val">{Math.round((fx.reverbAmt ?? 0.22) * 100)}%</span>
+            </div>
+            <input type="range" min={0} max={1} step={0.01}
+              value={fx.reverbAmt ?? 0.22}
+              onChange={e => setFx('reverbAmt', Number(e.target.value))} />
           </div>
-          <input type="range" min={0} max={25} step={1}
-            value={soundO.humanizeAmt ?? 0}
-            onChange={e => setSnd('humanizeAmt', Number(e.target.value))} />
-        </div>
-        <div className="vopt-row vopt-slider-row">
-          <div className="vopt-fx-label">
-            <span>Note length variance</span>
-            <span className="vopt-slider-val">
-              {(soundO.humanizeDawAmt ?? 0) === 0 ? 'Off' : `±${soundO.humanizeDawAmt}%`}
-            </span>
+          <div className="vopt-row vopt-slider-row">
+            <div className="vopt-fx-label">
+              <span>Decay</span>
+              <span className="vopt-slider-val">{(fx.reverbDecay ?? 2.5).toFixed(1)}s</span>
+            </div>
+            <input type="range" min={0.5} max={6} step={0.1}
+              value={fx.reverbDecay ?? 2.5}
+              onChange={e => setFx('reverbDecay', Number(e.target.value))} />
           </div>
-          <input type="range" min={0} max={5} step={1}
-            value={soundO.humanizeDawAmt ?? 0}
-            onChange={e => setSnd('humanizeDawAmt', Number(e.target.value))} />
-        </div>
+
+          <div className="vopt-section-title">EQ — High Shelf</div>
+          <div className="vopt-row vopt-slider-row">
+            <div className="vopt-fx-label">
+              <span>Presence</span>
+              <span className="vopt-slider-val">
+                {(fx.eqGain ?? 2) >= 0 ? '+' : ''}{(fx.eqGain ?? 2).toFixed(1)} dB
+              </span>
+            </div>
+            <input type="range" min={-12} max={12} step={0.5}
+              value={fx.eqGain ?? 2.0}
+              onChange={e => setFx('eqGain', Number(e.target.value))} />
+          </div>
+          <div className="vopt-row vopt-slider-row">
+            <div className="vopt-fx-label">
+              <span>Frequency</span>
+              <span className="vopt-slider-val">
+                {(fx.eqFreq ?? 3500) >= 1000
+                  ? `${((fx.eqFreq ?? 3500) / 1000).toFixed(1)}kHz`
+                  : `${fx.eqFreq ?? 3500}Hz`}
+              </span>
+            </div>
+            <input type="range" min={500} max={12000} step={100}
+              value={fx.eqFreq ?? 3500}
+              onChange={e => setFx('eqFreq', Number(e.target.value))} />
+          </div>
+        </>)}
+
+        {/* ── Humanizer ────────────────────────────────────────────────── */}
+        {soundTab === 'humanizer' && (<>
+          {!isMidi && (<>
+            <div className="vopt-section-title">Dynamic Markings</div>
+            <label className="vopt-row vopt-check-row">
+              <input type="checkbox" checked={!!sOpts.dynamicMarks}
+                onChange={e => setS('dynamicMarks', e.target.checked)} />
+              <span>Use written dynamics (pp, mp, mf, f…)</span>
+            </label>
+          </>)}
+
+          <div className="vopt-section-title">Humanizer</div>
+          <div className="vopt-row vopt-slider-row">
+            <div className="vopt-fx-label">
+              <span>Velocity variance</span>
+              <span className="vopt-slider-val">
+                {(soundO.humanizeAmt ?? 0) === 0 ? 'Off' : `±${soundO.humanizeAmt}`}
+              </span>
+            </div>
+            <input type="range" min={0} max={25} step={1}
+              value={soundO.humanizeAmt ?? 0}
+              onChange={e => setSnd('humanizeAmt', Number(e.target.value))} />
+          </div>
+          <div className="vopt-row vopt-slider-row">
+            <div className="vopt-fx-label">
+              <span>Note length variance</span>
+              <span className="vopt-slider-val">
+                {(soundO.humanizeDawAmt ?? 0) === 0 ? 'Off' : `±${soundO.humanizeDawAmt}%`}
+              </span>
+            </div>
+            <input type="range" min={0} max={5} step={1}
+              value={soundO.humanizeDawAmt ?? 0}
+              onChange={e => setSnd('humanizeDawAmt', Number(e.target.value))} />
+          </div>
+        </>)}
+
       </>)}
 
       {/* ═════ VISUAL / FX (MIDI only) ══════════════════════════════════════ */}

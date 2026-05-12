@@ -179,6 +179,14 @@ function autoKeyboardLayout(midiData) {
 function extractSteps(osmd, selPartIndices, fromMeasure, toMeasure, dynamicVelMap = {}) {
   const cursor    = osmd.cursor
   const allParts  = osmd.Sheet.Parts
+
+  // Hide the cursor and suppress scrollIntoView for the entire walk.
+  // Without this, every cursor.next() updates the SVG DOM element and fires
+  // scrollIntoView (followCursor:true), causing hundreds of layout recalcs
+  // that block the main thread for several seconds on large scores.
+  const _siv = Element.prototype.scrollIntoView
+  Element.prototype.scrollIntoView = function () {}
+  try { cursor.hide() } catch (_) {}
   const measures  = osmd.Sheet.SourceMeasures
   const useAll    = selPartIndices.length === allParts.length
   const selSet    = new Set(selPartIndices)
@@ -281,6 +289,8 @@ function extractSteps(osmd, selPartIndices, fromMeasure, toMeasure, dynamicVelMa
   }
 
   cursor.reset()
+  // Restore scrollIntoView — cursor visibility is managed by callers
+  Element.prototype.scrollIntoView = _siv
   return steps
 }
 
@@ -341,6 +351,9 @@ export default function SightReading() {
   const [baseBpm,       setBaseBpm]       = useState(80)   // song's original BPM — never changes after load
   const [bpmDelta,      setBpmDelta]      = useState(0)    // user offset in BPM steps of 5
   const [loop,          setLoop]          = useState(false)
+  const [scoreLoopPick,   setScoreLoopPick]   = useState(null)   // null | 'start' | 'end'
+  const [scoreLoopRange,  setScoreLoopRange]   = useState(null)   // null | [from, to] both inclusive 0-based
+  const [scoreLoopAnchor, setScoreLoopAnchor]  = useState(null)   // 0-based measure idx of first pick
   const [metronome,     setMetronome]     = useState(false)
   const [isPlaying,     setIsPlaying]     = useState(false)
   const [liveHL,        setLiveHL]        = useState([])
@@ -352,10 +365,11 @@ export default function SightReading() {
   const [hoveredMeasure,  setHoveredMeasure]  = useState(null)
   const [error,         setError]         = useState(null)
   const [dragOver,      setDragOver]      = useState(false)
-  const [folderFiles,     setFolderFiles]     = useState([])    // [{ name, fileObj, type, folder }]
-  const [folderSelIdx,    setFolderSelIdx]    = useState(null)  // index of currently loaded file
-  const [folderFilter,    setFolderFilter]    = useState('all') // 'all' | 'midi' | 'score'
-  const [folderSearch,    setFolderSearch]    = useState('')
+  const [folderFiles,        setFolderFiles]        = useState([])    // [{ name, fileObj, type, folder }]
+  const [folderSelIdx,       setFolderSelIdx]       = useState(null)  // index of currently loaded file
+  const [folderFilter,       setFolderFilter]       = useState('all') // 'all' | 'midi' | 'score'
+  const [folderSearch,       setFolderSearch]       = useState('')
+  const [folderPanelVisible, setFolderPanelVisible] = useState(true)  // hide/show the file list panel
   const [expandedFolders, setExpandedFolders] = useState(() => new Set())
   const [isFullscreen,    setIsFullscreen]    = useState(false)
   const [tracksOpen,      setTracksOpen]      = useState(false)
@@ -371,8 +385,7 @@ export default function SightReading() {
     eqFreq:      3500,   // Hz       500–12000
   })
   // Draft values for the score measure-range inputs — committed on blur/Enter only
-  const [draftFrom,     setDraftFrom]     = useState('1')
-  const [draftTo,       setDraftTo]       = useState('1')
+
   const folderInputRef    = useRef(null)   // webkitdirectory — scan whole folder
   const folderFilesRef    = useRef(null)   // multi-file — pick individual files
   const tracksRef         = useRef(null)
@@ -443,9 +456,6 @@ export default function SightReading() {
   useEffect(() => { scoreOptsRef.current   = scoreOpts              }, [scoreOpts])
   useEffect(() => { midiOptsRef.current    = midiOpts               }, [midiOpts])
 
-  // Sync measure draft inputs when range is set externally (file load, etc.)
-  useEffect(() => { setDraftFrom(String(startMeasure + 1)) }, [startMeasure])
-  useEffect(() => { setDraftTo(String(endMeasure))         }, [endMeasure])
 
   // ── Restore file list from IndexedDB on mount ─────────────────────────────
   useEffect(() => {
@@ -1171,6 +1181,9 @@ export default function SightReading() {
     stopPlayback()
     setError(null); setLoaded(false); setRendering(true); setUsedPcs(null)
     isMidiRef.current = false; setIsMidiFile(false); setMidiMeta(null)
+    // Reset loop state so the button is clean for every new score
+    setLoop(false); loopRef.current = false
+    setScoreLoopPick(null); setScoreLoopRange(null); setScoreLoopAnchor(null)
 
     try {
       const content = await readFile(file)
@@ -1263,6 +1276,9 @@ export default function SightReading() {
     stopPlayback()
     setError(null); setLoaded(false); setRendering(true); setUsedPcs(null)
     isMidiRef.current = true; setIsMidiFile(true)
+    // Reset loop state so the button is clean for every new file
+    setLoop(false); loopRef.current = false
+    setScoreLoopPick(null); setScoreLoopRange(null); setScoreLoopAnchor(null)
 
     try {
       const buffer = await file.arrayBuffer()
@@ -1492,16 +1508,6 @@ export default function SightReading() {
   }
 
   // Commit draft measure inputs (called on blur or Enter)
-  const commitFrom = () => {
-    const v = Math.max(1, Math.min(endMeasure, parseInt(draftFrom, 10) || 1))
-    setDraftFrom(String(v))
-    if (v - 1 !== startMeasure) updateRange(v - 1, endMeasure)
-  }
-  const commitTo = () => {
-    const v = Math.max(startMeasure + 1, Math.min(measureCount, parseInt(draftTo, 10) || measureCount))
-    setDraftTo(String(v))
-    if (v !== endMeasure) updateRange(startMeasure, v)
-  }
 
   // ── Unused-note highlight toggle ──────────────────────────────────────────
   const toggleUnused = () => {
@@ -1622,7 +1628,9 @@ export default function SightReading() {
         accept=".mid,.midi,.mxl,.musicxml,.xml"
         style={{ display: 'none' }} onChange={handleFilesInput} />
 
-      {/* Folder file list — hidden in fullscreen */}
+      {/* Folder file list — hidden in fullscreen or when manually collapsed.
+          Uses CSS display:none (not unmounting) so the layout of sr-score-canvas
+          never changes and OSMD's autoResize never fires unexpectedly. */}
       {isFolder && !isFullscreen && (() => {
         const midiCount  = folderFiles.filter(f => f.type === 'midi').length
         const scoreCount = folderFiles.filter(f => f.type === 'score').length
@@ -1691,7 +1699,7 @@ export default function SightReading() {
         )
 
         return (
-          <div className="sr-folder-panel">
+          <div className="sr-folder-panel" style={folderPanelVisible ? undefined : { display: 'none' }}>
             <div className="sr-folder-header">
               <span className="sr-folder-header-name">{headerTxt}</span>
               <span className="sr-folder-sep" />
@@ -1819,8 +1827,18 @@ export default function SightReading() {
           {/* Row 1: left controls | center play+tracks | right options */}
           <div className="sr-bar-row sr-bar-row-main">
 
-            {/* Left: mode selector + measure range (score only) */}
+            {/* Left: folder toggle (when file list loaded) + mode selector */}
             <div className="sr-bar-left">
+              {isFolder && (
+                <button
+                  className={`sr-icon-btn sr-folder-toggle-btn${folderPanelVisible ? ' active' : ''}`}
+                  onClick={() => setFolderPanelVisible(v => !v)}
+                  title={folderPanelVisible ? 'Hide file list' : 'Show file list'}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" width="15" height="15">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                  </svg>
+                </button>
+              )}
               <div ref={modeAnchorRef} className="sr-mode-anchor">
                 <button
                   className={`sr-mode-btn${optPanel === 'mode' ? ' active' : ''}`}
@@ -1845,29 +1863,6 @@ export default function SightReading() {
                   </div>
                 )}
               </div>
-              {!isMidi && measureCount > 0 && (
-                <div className="sr-measure-inputs">
-                  <span className="sr-mini-lbl">Measures</span>
-                  <input
-                    type="number" className="sr-measure-box"
-                    min={1} max={measureCount}
-                    value={draftFrom}
-                    onChange={e => setDraftFrom(e.target.value)}
-                    onBlur={commitFrom}
-                    onKeyDown={e => e.key === 'Enter' && commitFrom()}
-                  />
-                  <span className="sr-measure-sep">–</span>
-                  <input
-                    type="number" className="sr-measure-box"
-                    min={1} max={measureCount}
-                    value={draftTo}
-                    onChange={e => setDraftTo(e.target.value)}
-                    onBlur={commitTo}
-                    onKeyDown={e => e.key === 'Enter' && commitTo()}
-                  />
-                  <span className="sr-mini-lbl">of {measureCount}</span>
-                </div>
-              )}
               {isMidi && (
                 <HandPanel opts={visualOpts} onChange={setVisualOpts} />
               )}
@@ -1899,6 +1894,7 @@ export default function SightReading() {
                   audioFx={audioFx}       onAudioFx={handleAudioFx}
                   pianoVol={pianoVol}     onPianoVol={handlePianoVol}
                   metroVol={metroVol}     onMetroVol={handleMetroVol}
+                  metronome={metronome}   onMetronome={toggleMetronome}
                   lastVel={lastVel}
                   dynMarkCount={dynMarkCount}
                 />
@@ -1921,25 +1917,45 @@ export default function SightReading() {
               </button>
 
               <button
-                className={`sr-icon-btn${loop ? ' active' : ''}`}
+                className={`sr-icon-btn sr-loop-btn${(loop || scoreLoopPick !== null) ? ' active' : ''}`}
                 onClick={() => {
-                  const v = !loop
-                  setLoop(v)
-                  loopRef.current = v
-                  loopGapRef.current = 1
-                  // Turning loop OFF while MIDI is playing: seek to the current measure
-                  // and continue to song end — exactly like clicking the scrubber while
-                  // playing. updateRange handles startMeasure, endMeasure and restarts
-                  // startMidiPlayback so the PianoRoll props all stay in sync.
-                  if (!v && playingRef.current && isMidiRef.current) {
-                    const ts = midiDataRef.current?.header.timeSignatures[0]?.timeSignature ?? [4, 4]
-                    const barSec = ts[0] * (60 / bpmRef.current)
-                    const rawElapsed = (Date.now() - (playStartRef.current ?? Date.now())) / 1000
-                    const curMeasure = Math.max(0, Math.min(
-                      measureCount - 1,
-                      Math.floor(startMeasureRef.current + Math.max(0, rawElapsed) / barSec)
-                    ))
-                    updateRange(curMeasure, measureCount)
+                  if (isMidi) {
+                    // ── MIDI: simple toggle ───────────────────────────────
+                    const v = !loop
+                    setLoop(v)
+                    loopRef.current = v
+                    loopGapRef.current = 1
+                    // Turning loop OFF while MIDI is playing: seek to current measure
+                    if (!v && playingRef.current && isMidiRef.current) {
+                      const ts = midiDataRef.current?.header.timeSignatures[0]?.timeSignature ?? [4, 4]
+                      const barSec = ts[0] * (60 / bpmRef.current)
+                      const rawElapsed = (Date.now() - (playStartRef.current ?? Date.now())) / 1000
+                      const curMeasure = Math.max(0, Math.min(
+                        measureCount - 1,
+                        Math.floor(startMeasureRef.current + Math.max(0, rawElapsed) / barSec)
+                      ))
+                      updateRange(curMeasure, measureCount)
+                    }
+                  } else {
+                    // ── Score: pick-based range loop ──────────────────────
+                    if (scoreLoopPick !== null) {
+                      // Cancel mid-pick
+                      setScoreLoopPick(null)
+                      setScoreLoopAnchor(null)
+                    } else if (loop) {
+                      // Loop active → turn off and restore full score view
+                      setLoop(false)
+                      loopRef.current = false
+                      setScoreLoopRange(null)
+                      setScoreLoopAnchor(null)
+                      stopPlayback()
+                      _setStartMeasure(0)
+                      setEndMeasure(measureCount)
+                      rerender(0, measureCount, selectedParts)
+                    } else {
+                      // Start the pick flow
+                      setScoreLoopPick('start')
+                    }
                   }
                 }}
                 title="Loop">
@@ -1948,17 +1964,6 @@ export default function SightReading() {
                   <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
                   <polyline points="7 23 3 19 7 15"/>
                   <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
-                </svg>
-              </button>
-
-              {/* Metronome icon button */}
-              <button
-                className={`sr-icon-btn${metronome ? ' active' : ''}`}
-                onClick={() => toggleMetronome(!metronome)}
-                title="Metronome">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="15" height="15">
-                  <polygon points="12,3 3,21 21,21"/>
-                  <line x1="12" y1="21" x2="17" y2="9"/>
                 </svg>
               </button>
 
@@ -2027,6 +2032,7 @@ export default function SightReading() {
                   audioFx={audioFx}       onAudioFx={handleAudioFx}
                   pianoVol={pianoVol}     onPianoVol={handlePianoVol}
                   metroVol={metroVol}     onMetroVol={handleMetroVol}
+                  metronome={metronome}   onMetronome={toggleMetronome}
                   lastVel={lastVel}
                   dynMarkCount={dynMarkCount}
                 />
@@ -2151,22 +2157,63 @@ export default function SightReading() {
         )}
         {/* Wrapper keeps overlays in the exact same coordinate space as the SVG */}
         <div className="sr-score-canvas">
+          {/* Floating hint shown while the user is picking loop start / end */}
+          {!isMidi && scoreLoopPick !== null && (
+            <div className="sr-loop-pick-hint">
+              <span>
+                {scoreLoopPick === 'start' ? 'Select start measure' : 'Select end measure'}
+              </span>
+            </div>
+          )}
           <div
             ref={scoreContainerRef}
             className={`sr-score-container${(!loaded || rendering || isMidi) ? ' sr-score-hidden' : ''}`}
           />
           {loaded && !isMidi && scoreOverlays.length > 0 && (
             <div className="sr-score-overlays">
-              {scoreOverlays.map(ov => (
-                <div
-                  key={ov.measureIdx}
-                  className={`sr-score-ov${hoveredMeasure === ov.measureIdx ? ' sr-score-ov--hovered' : ''}`}
-                  style={{ left: ov.x, top: ov.y, width: ov.w, height: ov.h }}
-                  onClick={() => jumpToMeasure(ov.measureIdx)}
-                  onMouseEnter={() => setHoveredMeasure(ov.measureIdx)}
-                  onMouseLeave={() => setHoveredMeasure(null)}
-                />
-              ))}
+              {scoreOverlays.map(ov => {
+                const isPicking  = scoreLoopPick !== null
+                const isAnchor   = scoreLoopPick === 'end' && scoreLoopAnchor === ov.measureIdx
+                const isHovered  = hoveredMeasure === ov.measureIdx
+                let cls = 'sr-score-ov'
+                if (isPicking)  cls += ' sr-score-ov--loop-pick'
+                if (isAnchor)   cls += ' sr-score-ov--loop-anchor'
+                if (isHovered)  cls += ' sr-score-ov--hovered'
+                return (
+                  <div
+                    key={ov.measureIdx}
+                    className={cls}
+                    style={{ left: ov.x, top: ov.y, width: ov.w, height: ov.h }}
+                    onClick={() => {
+                      if (scoreLoopPick === 'start') {
+                        // First pick: record anchor, wait for end
+                        setScoreLoopAnchor(ov.measureIdx)
+                        setScoreLoopPick('end')
+                      } else if (scoreLoopPick === 'end') {
+                        // Second pick: commit range
+                        const anchor = scoreLoopAnchor ?? ov.measureIdx
+                        const from = Math.min(anchor, ov.measureIdx)
+                        const to   = Math.max(anchor, ov.measureIdx)
+                        setScoreLoopRange([from, to])
+                        setScoreLoopPick(null)
+                        setScoreLoopAnchor(null)
+                        setLoop(true)
+                        loopRef.current  = true
+                        loopGapRef.current = 1
+                        stopPlayback()
+                        _setStartMeasure(from)
+                        setEndMeasure(to + 1)
+                        rerender(from, to + 1, selectedParts)
+                      } else {
+                        // Normal: jump cursor to measure
+                        jumpToMeasure(ov.measureIdx)
+                      }
+                    }}
+                    onMouseEnter={() => setHoveredMeasure(ov.measureIdx)}
+                    onMouseLeave={() => setHoveredMeasure(null)}
+                  />
+                )
+              })}
             </div>
           )}
         </div>
