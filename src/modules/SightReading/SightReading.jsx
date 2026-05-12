@@ -344,10 +344,12 @@ export default function SightReading() {
   const [metronome,     setMetronome]     = useState(false)
   const [isPlaying,     setIsPlaying]     = useState(false)
   const [liveHL,        setLiveHL]        = useState([])
-  const [practiceActive, setPracticeActive] = useState(false)
-  const [practiceStep,   setPracticeStep]   = useState(0)   // 1-based display
-  const [practiceTotal,  setPracticeTotal]  = useState(0)
-  const [practiceDone,   setPracticeDone]   = useState(false)
+  const [practiceActive,  setPracticeActive]  = useState(false)
+  const [practiceStep,    setPracticeStep]    = useState(0)
+  const [practiceTotal,   setPracticeTotal]   = useState(0)
+  const [practiceDone,    setPracticeDone]    = useState(false)
+  const [scoreOverlays,   setScoreOverlays]   = useState([])   // hit-zones over each measure
+  const [hoveredMeasure,  setHoveredMeasure]  = useState(null)
   const [error,         setError]         = useState(null)
   const [dragOver,      setDragOver]      = useState(false)
   const [folderFiles,     setFolderFiles]     = useState([])    // [{ name, fileObj, type, folder }]
@@ -605,66 +607,80 @@ export default function SightReading() {
   // Keep stable ref in sync so the MIDI callback (registered once) can call it
   useEffect(() => { practiceAdvanceFnRef.current = advancePractice }, [advancePractice])
 
-  // ── Click on score → jump cursor to that measure ──────────────────────────
-  const handleScoreClick = useCallback((e) => {
-    const osmd = osmdRef.current
-    if (!osmd || isMidiRef.current) return
+  // ── Compute overlay hit-zones over each score measure ───────────────────
+  const computeScoreOverlays = useCallback(() => {
+    const osmd     = osmdRef.current
+    const div      = scoreContainerRef.current   // sr-score-container (OSMD host)
+    if (!osmd || !div) return
 
-    const div  = scoreContainerRef.current
-    const svg  = div?.querySelector('svg')
+    const ml = osmd.GraphicSheet?.MeasureList
+    if (!ml?.length) return
+
+    const svg = div.querySelector('svg')
     if (!svg) return
 
-    const svgRect = svg.getBoundingClientRect()
-    const clickX  = e.clientX - svgRect.left
-    const clickY  = e.clientY - svgRect.top
+    // sr-score-canvas is now the scroll container (overflow-y:auto).
+    // getBoundingClientRect() gives viewport-relative positions; adding scrollTop/Left
+    // converts the difference to content-origin-relative coordinates so the overlay
+    // top/left values stay locked to their measure even after scrolling.
+    const canvasEl   = div.parentElement            // sr-score-canvas
+    const canvasRect = canvasEl.getBoundingClientRect()
+    const svgRect    = svg.getBoundingClientRect()
+    const svgOffX    = svgRect.left - canvasRect.left + canvasEl.scrollLeft
+    const svgOffY    = svgRect.top  - canvasRect.top  + canvasEl.scrollTop
 
-    // Unit → pixel scale (same approach as ChordStaff overlays)
     let uip = osmd.EngravingRules?.UnitInPixels
     if (!uip || uip <= 0) {
       const pageW = osmd.GraphicSheet?.MusicPages?.[0]?.PositionAndShape?.Size?.width
       uip = (pageW && svgRect.width) ? svgRect.width / pageW : 10
     }
 
-    const ml = osmd.GraphicSheet?.MeasureList
-    if (!ml?.length) return
-
-    // Find the measure whose bounding box contains the click
-    let clickedMeasureIdx = -1
-    for (let i = 0; i < ml.length; i++) {
-      const gm = ml[i]?.[0]
-      if (!gm) continue
+    const raw = []
+    ml.forEach((staffArr, idx) => {
+      const gm = staffArr?.[0]
+      if (!gm) return
       const abs  = gm.PositionAndShape.AbsolutePosition
       const size = gm.PositionAndShape.Size
-      if (
-        clickX >= abs.x  * uip && clickX <= (abs.x  + size.width)  * uip &&
-        clickY >= abs.y  * uip && clickY <= (abs.y  + size.height) * uip
-      ) {
-        clickedMeasureIdx = i
-        break
-      }
-    }
-    if (clickedMeasureIdx < 0) return
+      raw.push({
+        measureIdx: idx,
+        x: abs.x * uip + svgOffX,
+        y: abs.y * uip + svgOffY,
+        w: size.width  * uip,
+        h: size.height * uip,
+      })
+    })
 
-    // Find the first step at (or after) that measure that has actual notes
-    const steps   = stepsRef.current
-    let stepIdx   = steps.findIndex(s => s.measureIndex >= clickedMeasureIdx)
+    // Normalise heights per row so rest-only bars are as easy to click as note bars
+    const rows = []
+    raw.forEach(m => {
+      const row = rows.find(r => Math.abs(r.y - m.y) < 4)
+      if (row) row.items.push(m); else rows.push({ y: m.y, items: [m] })
+    })
+    rows.forEach(row => {
+      const maxH = Math.max(...row.items.map(m => m.h))
+      row.items.forEach(m => { m.h = maxH })
+    })
+
+    setScoreOverlays(raw)
+  }, [])
+
+  // ── Jump cursor to a specific measure ────────────────────────────────────
+  const jumpToMeasure = useCallback((measureIdx) => {
+    const osmd = osmdRef.current
+    if (!osmd || isMidiRef.current) return
+
+    const steps = stepsRef.current
+    let stepIdx = steps.findIndex(s => s.measureIndex >= measureIdx)
     if (stepIdx < 0) return
-    // Skip to the first step in that measure that has notes (or keep the first step)
     const noteStep = steps.findIndex(
-      (s, i) => i >= stepIdx && s.measureIndex === clickedMeasureIdx && s.noteEvents.length > 0
+      (s, i) => i >= stepIdx && s.measureIndex === measureIdx && s.noteEvents.length > 0
     )
     if (noteStep >= 0) stepIdx = noteStep
 
-    const targetCursorIdx = steps[stepIdx].cursorIdx
-
-    // Remember this as the playback start position
-    playFromStepRef.current = stepIdx
-
-    // Apply the tempo that is effective at this measure (look back for last tempo marking)
-    const allSteps = stepsRef.current
+    // Apply the effective tempo at this measure
     let tempoAtStep = null
     for (let i = stepIdx; i >= 0; i--) {
-      if (allSteps[i]?.tempo != null) { tempoAtStep = allSteps[i].tempo; break }
+      if (steps[i]?.tempo != null) { tempoAtStep = steps[i].tempo; break }
     }
     const newBpm = tempoAtStep ?? scoreOrigBpmRef.current
     if (newBpm > 0) {
@@ -673,7 +689,10 @@ export default function SightReading() {
       setBpm(newBpm)
     }
 
+    playFromStepRef.current = stepIdx
+
     // Move OSMD cursor
+    const targetCursorIdx = steps[stepIdx].cursorIdx
     osmd.cursor.reset()
     osmd.cursor.show()
     for (let i = 0; i < targetCursorIdx; i++) {
@@ -757,8 +776,13 @@ export default function SightReading() {
     rules.TitleHeight         = 2.0
     rules.TitleTopDistance    = 3.0
     rules.SubtitleHeight      = 1.8
-    rules.DefaultColorCursor  = '#64b5f6'  // override OSMD's built-in green default
-  }, [])
+    rules.DefaultColorCursor  = '#64b5f6'
+
+    // Recompute overlays after OSMD auto-resizes the SVG
+    const ro = new ResizeObserver(() => requestAnimationFrame(computeScoreOverlays))
+    ro.observe(scoreContainerRef.current)
+    return () => ro.disconnect()
+  }, [computeScoreOverlays])
 
   // ── Metronome ──────────────────────────────────────────────────────────────
   const getMetroCtx = () => {
@@ -1167,6 +1191,7 @@ export default function SightReading() {
       await rafWait(2)
       osmdRef.current.setOptions({ drawFromMeasureNumber: 1, drawUpToMeasureNumber: mCount })
       osmdRef.current.render()
+      requestAnimationFrame(computeScoreOverlays)
       const { map: dynMap, count: dynCount } = buildMeasureVelocityMap(osmdRef.current)
       dynamicVelMapRef.current = dynMap
       setDynMarkCount(dynCount)
@@ -1188,7 +1213,23 @@ export default function SightReading() {
         setBaseBpm(bpmRef.current); setBpmDelta(0)
         scoreOrigBpmRef.current = bpmRef.current
       }
+
+      // cursor.show() internally calls scrollIntoView({behavior:'smooth'}) when
+      // followCursor:true — that async animation would override any synchronous
+      // scrollTop reset.  Suppress it by blanking scrollIntoView on the prototype
+      // for just this call, then force the canvas to y=0.
+      const _siv = Element.prototype.scrollIntoView
+      Element.prototype.scrollIntoView = function() {}
       osmdRef.current.cursor.reset(); osmdRef.current.cursor.show()
+      Element.prototype.scrollIntoView = _siv
+      const _canvas = scoreContainerRef.current?.parentElement
+      if (_canvas) { _canvas.scrollTop = 0 }
+      // Belt-and-suspenders: reset again after browser settles (catches any
+      // deferred scroll from DOM-insertion or OSMD's autoResize re-render).
+      requestAnimationFrame(() => {
+        if (scoreContainerRef.current?.parentElement)
+          scoreContainerRef.current.parentElement.scrollTop = 0
+      })
 
       // Defer the heavy cursor walk (extractSteps) to after the first paint so
       // the score appears immediately. Steps are needed for playback & practice
@@ -1408,9 +1449,21 @@ export default function SightReading() {
     if (!osmdRef.current || isMidiRef.current) return
     osmdRef.current.setOptions({ drawFromMeasureNumber: from + 1, drawUpToMeasureNumber: to })
     osmdRef.current.render()
+    requestAnimationFrame(computeScoreOverlays)
     stepsRef.current = extractSteps(osmdRef.current, selParts, from, to, dynamicVelMapRef.current)
+    playFromStepRef.current = 0
+    // Suppress OSMD's smooth scrollIntoView during cursor placement (same as load)
+    const _siv = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function() {}
     osmdRef.current.cursor.reset(); osmdRef.current.cursor.show()
-  }, [])
+    Element.prototype.scrollIntoView = _siv
+    const _canvas = scoreContainerRef.current?.parentElement
+    if (_canvas) { _canvas.scrollTop = 0 }
+    requestAnimationFrame(() => {
+      if (scoreContainerRef.current?.parentElement)
+        scoreContainerRef.current.parentElement.scrollTop = 0
+    })
+  }, [computeScoreOverlays])
 
   const togglePart = (id) => {
     const next = selectedParts.includes(id)
@@ -2096,12 +2149,27 @@ export default function SightReading() {
             </div>
           </>
         )}
-        <div
-          ref={scoreContainerRef}
-          className={`sr-score-container${(!loaded || rendering || isMidi) ? ' sr-score-hidden' : ''}`}
-          onClick={handleScoreClick}
-          style={{ cursor: loaded && !isMidi ? 'pointer' : undefined }}
-        />
+        {/* Wrapper keeps overlays in the exact same coordinate space as the SVG */}
+        <div className="sr-score-canvas">
+          <div
+            ref={scoreContainerRef}
+            className={`sr-score-container${(!loaded || rendering || isMidi) ? ' sr-score-hidden' : ''}`}
+          />
+          {loaded && !isMidi && scoreOverlays.length > 0 && (
+            <div className="sr-score-overlays">
+              {scoreOverlays.map(ov => (
+                <div
+                  key={ov.measureIdx}
+                  className={`sr-score-ov${hoveredMeasure === ov.measureIdx ? ' sr-score-ov--hovered' : ''}`}
+                  style={{ left: ov.x, top: ov.y, width: ov.w, height: ov.h }}
+                  onClick={() => jumpToMeasure(ov.measureIdx)}
+                  onMouseEnter={() => setHoveredMeasure(ov.measureIdx)}
+                  onMouseLeave={() => setHoveredMeasure(null)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Keyboard — flush below Synthesia grid in MIDI mode, standalone in Score mode */}

@@ -464,16 +464,20 @@ input[type=range]::-webkit-slider-thumb {
 }
 
 /* Score fills all remaining space in fullscreen */
-.sight-reading:fullscreen .sr-score-container {
+.sight-reading:fullscreen .sr-score-canvas {
   flex: 1;
   max-height: none;
   min-height: 0;
+}
+.sight-reading:-webkit-full-screen .sr-score-canvas {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
+}
+.sight-reading:fullscreen .sr-score-container {
   border-radius: 0;
 }
 .sight-reading:-webkit-full-screen .sr-score-container {
-  flex: 1;
-  max-height: none;
-  min-height: 0;
   border-radius: 0;
 }
 
@@ -679,6 +683,52 @@ input[type=range]::-webkit-slider-thumb {
 .sr-roll-container,
 .sr-score-wrap {
   position: relative;
+}
+
+/* ── Score measure overlays (hover + click to jump) ──────────────────────── */
+
+/*
+ * sr-score-canvas is NOW the scroll container for the score.
+ * Both the OSMD host div (sr-score-container) and the overlay divs live
+ * inside it, so they scroll together as a single unit.
+ */
+.sr-score-canvas {
+  position: relative;
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: 60vh;
+  flex-shrink: 0;
+  /* Prevent browser scroll-anchoring from jumping when OSMD inserts the SVG */
+  overflow-anchor: none;
+}
+
+/*
+ * sr-score-overlays is a non-positioned wrapper used only for pointer-events
+ * grouping.  NOT position:absolute so it doesn't become a containing block —
+ * the individual sr-score-ov divs are absolute children of sr-score-canvas.
+ */
+.sr-score-overlays {
+  pointer-events: none;
+}
+
+/*
+ * Each overlay is positioned relative to sr-score-canvas (nearest positioned
+ * ancestor).  Because sr-score-canvas is the scroll container, top/left values
+ * are relative to the content origin (y=0 before any scroll), so they stay
+ * locked to the correct measure regardless of scroll position.
+ */
+.sr-score-ov {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: background 0.1s, outline 0.1s;
+}
+
+.sr-score-ov--hovered {
+  background: rgba(100, 181, 246, 0.18);
+  outline: 2px solid rgba(100, 181, 246, 0.55);
+  outline-offset: -1px;
 }
 
 .sr-top-right-overlays {
@@ -1195,10 +1245,7 @@ input[type=range]::-webkit-slider-thumb {
 .sr-score-container {
   background: #fff;
   border-radius: var(--radius);
-  max-height: 60vh;    /* cap in normal view — score is scrollable */
-  flex-shrink: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
+  /* scroll is handled by parent sr-score-canvas — no overflow or max-height here */
   padding: 8px 4px;
 }
 .sr-score-container canvas,
