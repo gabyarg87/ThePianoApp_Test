@@ -940,12 +940,27 @@ export default function SightReading() {
     playingRef.current = true; setIsPlaying(true)
     if (metroActiveRef.current) startMetronome()
 
+    const fromIdx = playFromStepRef.current
+
     // Pre-calculate per-step offsets and beatMs values, honouring in-score
     // tempo changes. User BPM is applied as a proportional scale so that
     // "slow down / speed up" still works across tempo changes.
-    // userScale = 1.0 when the user hasn't touched the slider.
-    const origBpm   = scoreOrigBpmRef.current || bpmRef.current
-    const userScale = bpmRef.current / origBpm
+    //
+    // userScale is computed relative to the score's tempo AT the play-start
+    // position — NOT the load-time scoreOrigBpmRef. This prevents a spurious
+    // scale when jumpToMeasure sets bpmRef to a mid-score tempo that differs
+    // from the tempo OSMD reported at load (e.g. when the first tempo expression
+    // it finds is a Larghetto later in the piece).
+    //
+    // If the user hasn't manually adjusted BPM: bpmRef == startTempo → scale = 1.0
+    // If the user slowed to 80% of a 100-BPM section: bpmRef = 80, startTempo = 100 → scale = 0.8
+    const startTempo = (() => {
+      for (let i = fromIdx; i >= 0; i--) {
+        if (seq[i]?.tempo != null) return seq[i].tempo
+      }
+      return scoreOrigBpmRef.current || bpmRef.current
+    })()
+    const userScale   = (startTempo > 0) ? bpmRef.current / startTempo : 1.0
     let currentBeatMs = (60 / bpmRef.current) * 1000
 
     // stepTiming[i] = { offset, beatMs, scaledTempo } pre-computed for every step
@@ -961,12 +976,8 @@ export default function SightReading() {
       accOffset += step.beats * currentBeatMs
     })
 
-    // Restore user's intended BPM before computing scale — in-score tempo changes
-    // from a previous playback may have dirtied bpmRef without resetting it.
-    bpmRef.current = userBpmRef.current
+    // Update the BPM display to reflect the start position
     setBpm(userBpmRef.current)
-
-    const fromIdx  = playFromStepRef.current
     const timeBase = fromIdx > 0 ? (stepTiming[fromIdx]?.offset ?? 0) : 0
 
     // Pre-advance cursor to the chosen start step — hide during walk so each
