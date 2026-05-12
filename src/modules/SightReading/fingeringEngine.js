@@ -2,7 +2,7 @@
 // JavaScript port of the pianoplayer algorithm by Marco Musy
 // https://github.com/marcomusy/pianoplayer
 //
-// Core idea: exhaustive search with biomechanical pruning over a sliding
+// Core idea: exhaustive search with biomechanical cost over a sliding
 // look-ahead window of notes.  Each candidate fingering sequence is scored
 // by the average "finger velocity" (distance / time, weighted by finger
 // strength and black-key bias).  Lower velocity = lower cost = better.
@@ -37,41 +37,59 @@ const CHORD_LIMITS = {
 
 // ── Cost function ─────────────────────────────────────────────────────────────
 // Returns the average "velocity" (hand speed) for a candidate fingering.
-// Lower is better.
+// Lower is better.  Bad transitions add penalty multipliers instead of
+// hard blocks so the DFS always finds *some* answer.
 function aveCost(notes, fingers) {
   let sum = 0, n = 0
   for (let i = 1; i < notes.length; i++) {
-    const dist = Math.abs(notes[i].x - notes[i - 1].x)
-    const dt   = Math.max(0.1, notes[i].time - notes[i - 1].time)
-    let v = dist / dt
-    v /= WEIGHTS[fingers[i]]
-    if (notes[i].isBlack) v /= BLACK_BIAS[fingers[i]]
+    const fi = fingers[i]
+    if (!fi) continue                         // safety: skip undefined
+
+    const w  = WEIGHTS[fi]
+    if (!w)  continue                         // safety: skip zero weight
+
+    const distRaw = notes[i].x - notes[i - 1].x
+    const dist    = Math.abs(distRaw)
+    if (!isFinite(dist)) continue             // skip NaN / Infinity positions
+
+    const dtRaw = notes[i].time - notes[i - 1].time
+    const dt    = Math.max(0.1, isFinite(dtRaw) ? dtRaw : 0)
+
+    let v = dist / dt / w
+
+    const bb = BLACK_BIAS[fi]
+    if (notes[i].isBlack && bb > 0) v /= bb
+
+    // ── Soft penalties (instead of hard shouldSkip blocks) ──────────────────
+    const fp = fingers[i - 1]
+
+    // Same finger on consecutive non-chord notes → very costly
+    if (fp === fi && notes[i].chordId !== notes[i - 1].chordId) v *= 6
+
+    // Thumb on black key while ascending → uncomfortable
+    if (fi === 1 && notes[i].isBlack && notes[i].midi > notes[i - 1].midi) v *= 4
+
+    // Thumb on black key while descending from slow note → uncomfortable
+    if (fp === 1 && notes[i - 1].isBlack && notes[i].midi < notes[i - 1].midi) v *= 2
+
+    // Non-thumb: finger ascending while pitch descends → awkward crossing
+    if (fp !== 1 && fp !== undefined && fi > fp && notes[i].midi < notes[i - 1].midi) v *= 3
+
+    if (!isFinite(v)) continue
     sum += v; n++
   }
   return n ? sum / n : 0
 }
 
-// ── Pruning rules ─────────────────────────────────────────────────────────────
-// Returns true if the transition (prevNote, fa) → (currNote, fb) should be
-// skipped entirely (biomechanically invalid or extremely costly).
+// ── Hard pruning rules ────────────────────────────────────────────────────────
+// Only keeps truly physically impossible transitions.
+// "Uncomfortable but possible" transitions are handled by cost penalties above.
 function shouldSkip(a, b, fa, fb, side) {
-  // Same finger on a short note (rapid repeated finger is hard)
-  if (fa === fb && b.duration < 4) return true
-
-  // Non-thumb ascending finger number while pitch descends (awkward crossing)
-  if (fa !== 1 && fb > fa && b.midi < a.midi) return true
-
-  // Thumb-under onto a black key while ascending (uncomfortable crossover)
-  if (fb === 1 && b.isBlack && b.midi > a.midi) return true
-
-  // Fast departure from black key with thumb going down
-  if (fa === 1 && a.isBlack && b.midi < a.midi && b.duration < 2) return true
-
   // ── Chord-specific stretch limits ──────────────────────────────────────────
   if (a.chordId !== null && a.chordId === b.chordId) {
-    // Chord notes are sorted ascending by pitch.
-    // RH: fingers increase with pitch (thumb=1 on lowest)  → require fa < fb
-    // LH: fingers decrease with pitch (pinky=5 on lowest)  → require fa > fb
+    // Chord notes must be in ascending pitch order when passed in.
+    // RH: thumb (1) on lowest pitch → fingers increase with pitch → require fa < fb
+    // LH: pinky (5) on lowest pitch → fingers decrease with pitch → require fa > fb
     if (side === 'right' && fa >= fb) return true
     if (side === 'left'  && fa <= fb) return true
 
@@ -86,20 +104,20 @@ function shouldSkip(a, b, fa, fb, side) {
 
 // ── Window search ─────────────────────────────────────────────────────────────
 // Exhaustive DFS over `win` notes with pruning.
-// Returns the best finger array for these notes, or middle-finger fallback.
+// Returns the best finger array for these notes, or a sequential fallback.
 function searchWindow(notes, win, startFinger, side) {
-  let best = null
+  let best     = null
   let bestCost = Infinity
-  const cur = new Array(win)
+  const cur    = new Array(win)
 
   function dfs(level, prevFinger) {
     if (level === win) {
       const c = aveCost(notes, cur)
-      if (c < bestCost) { bestCost = c; best = cur.slice() }
+      if (isFinite(c) && c < bestCost) { bestCost = c; best = cur.slice() }
       return
     }
-    // First note: if a carry-over finger is provided, try it first
-    const candidates = (level === 0 && startFinger) ? [startFinger] : [1, 2, 3, 4, 5]
+    // First note in window: if we have a carry-over finger, try it first
+    const candidates = (level === 0 && startFinger) ? [startFinger, 1, 2, 3, 4, 5] : [1, 2, 3, 4, 5]
     for (const f of candidates) {
       if (level > 0 && shouldSkip(notes[level - 1], notes[level], prevFinger, f, side)) continue
       cur[level] = f
@@ -108,7 +126,14 @@ function searchWindow(notes, win, startFinger, side) {
   }
 
   dfs(0, null)
-  return best ?? new Array(win).fill(3)   // fallback: middle finger
+
+  if (best) return best
+
+  // Fallback: generate a sequential scale fingering instead of all-3s
+  return Array.from({ length: win }, (_, i) => {
+    if (side === 'right') return ((i % 5) + 1)           // 1 2 3 4 5 1 2 …
+    else                  return (5 - (i % 5))            // 5 4 3 2 1 5 4 …
+  })
 }
 
 // ── Main export: generate fingerings ─────────────────────────────────────────
@@ -118,20 +143,36 @@ function searchWindow(notes, win, startFinger, side) {
 export function generateFingering(notes, side = 'right') {
   if (!notes.length) return []
 
-  // Mirror keyboard x-coordinates for left hand so we can reuse the RH algorithm
-  const ns = side === 'left' ? notes.map(n => ({ ...n, x: -n.x })) : notes
+  // ── Sort chord notes by ascending MIDI pitch ──────────────────────────────
+  // The chord constraints require notes within each chord to arrive in
+  // ascending pitch order (lowest first).  We track original indices so
+  // we can map results back to the caller's order.
+  const indexed = notes.map((n, i) => ({ ...n, _origIdx: i }))
+  indexed.sort((a, b) => {
+    // Primary: time order
+    const dtA = a.time - b.time
+    if (Math.abs(dtA) > 1e-6) return dtA
+    // Secondary within a chord: ascending MIDI (lowest pitch first)
+    return a.midi - b.midi
+  })
 
-  const result = []
-  const WIN    = 7   // look-ahead window (7 balances quality vs speed)
+  // Mirror keyboard x-coordinates for left hand so we can reuse the RH algorithm
+  const ns = side === 'left' ? indexed.map(n => ({ ...n, x: -n.x })) : indexed
+
+  const fingerSeq = []
+  const WIN       = 6   // look-ahead window — 6 is safe with 5 available fingers
 
   for (let i = 0; i < ns.length; ) {
     const win         = Math.min(WIN, ns.length - i)
-    const startFinger = result.length ? result[result.length - 1] : null
+    const startFinger = fingerSeq.length ? fingerSeq[fingerSeq.length - 1] : null
     const fingers     = searchWindow(ns.slice(i, i + win), win, startFinger, side)
-    result.push(...fingers)
+    fingerSeq.push(...fingers)
     i += win
   }
 
+  // Map results back to original note order
+  const result = new Array(notes.length)
+  indexed.forEach((n, si) => { result[n._origIdx] = fingerSeq[si] })
   return result
 }
 
@@ -189,6 +230,8 @@ export function extractFingeringNotes(osmd) {
         if (tie?.Notes?.length > 0 && tie.Notes[0] !== note) return
 
         const midi   = note.halfTone + 12
+        if (!isFinite(midi)) return              // guard against bad halfTone
+
         const pc     = ((midi % 12) + 12) % 12
         const octave = Math.floor(midi / 12) - 1
         const x      = octave * OCTAVE_WIDTH + NOTE_STEPS[pc] * (OCTAVE_WIDTH / 7)
