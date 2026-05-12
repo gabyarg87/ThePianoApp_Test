@@ -919,10 +919,14 @@ export default function SightReading() {
         const targetCursorIdx = fromIdx > 0 && stepsRef.current[fromIdx]
           ? stepsRef.current[fromIdx].cursorIdx
           : 0
+        const _siv = Element.prototype.scrollIntoView
+        Element.prototype.scrollIntoView = () => {}
+        osmdRef.current?.cursor.hide()
         osmdRef.current?.cursor.reset()
         for (let i = 0; i < targetCursorIdx; i++) {
           osmdRef.current.cursor.next()
         }
+        Element.prototype.scrollIntoView = _siv
         osmdRef.current?.cursor.show()
       } catch (_) {}
     }
@@ -965,15 +969,21 @@ export default function SightReading() {
     const fromIdx  = playFromStepRef.current
     const timeBase = fromIdx > 0 ? (stepTiming[fromIdx]?.offset ?? 0) : 0
 
-    osmdRef.current.cursor.reset(); osmdRef.current.cursor.show()
+    // Pre-advance cursor to the chosen start step — hide during walk so each
+    // cursor.next() doesn't trigger SVG repaints + scrollIntoView
+    const _sivPlay = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = () => {}
+    osmdRef.current.cursor.hide()
+    osmdRef.current.cursor.reset()
     let cursorPos = 0
-    // Pre-advance cursor to the chosen start step
     if (fromIdx > 0 && seq[fromIdx]) {
       const startCursorIdx = seq[fromIdx].cursorIdx
       while (cursorPos < startCursorIdx) {
         try { osmdRef.current.cursor.next(); cursorPos++ } catch (_) {}
       }
     }
+    Element.prototype.scrollIntoView = _sivPlay
+    osmdRef.current.cursor.show()
     let activeStepTempo = seq[fromIdx]?.tempo ?? seq[0]?.tempo ?? null
     let activeMeasure   = -1   // for bar-restart metronome sync
 
