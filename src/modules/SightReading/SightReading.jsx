@@ -8,7 +8,6 @@ import OptionsPanel  from './OptionsPanel.jsx'
 import HandPanel     from './HandPanel.jsx'
 import MeasureScrubber from './MeasureScrubber.jsx'
 import { saveFilesToCache, loadFilesFromCache, clearFilesCache } from './fileCache.js'
-import { extractFingeringNotes, generateFingering } from './fingeringEngine.js'
 import './sight-reading.css'
 
 // ── MIDI / note helpers ───────────────────────────────────────────────────────
@@ -355,9 +354,6 @@ export default function SightReading() {
   const [scoreLoopPick,    setScoreLoopPick]    = useState(null)   // null | 'start' | 'end'
   const [scoreLoopRange,   setScoreLoopRange]   = useState(null)   // null | [from, to] both inclusive 0-based
   const [scoreLoopAnchor,  setScoreLoopAnchor]  = useState(null)   // 0-based measure idx of first pick
-  const [fingeringOverlays, setFingeringOverlays] = useState([])   // [{x,y,finger,side}] screen-px positions
-  const [fingeringActive,   setFingeringActive]   = useState(false) // whether fingering numbers are shown
-  const [fingeringLoading,  setFingeringLoading]  = useState(false) // computing...
   const [metronome,     setMetronome]     = useState(false)
   const [isPlaying,     setIsPlaying]     = useState(false)
   const [liveHL,        setLiveHL]        = useState([])
@@ -1185,10 +1181,9 @@ export default function SightReading() {
     stopPlayback()
     setError(null); setLoaded(false); setRendering(true); setUsedPcs(null)
     isMidiRef.current = false; setIsMidiFile(false); setMidiMeta(null)
-    // Reset loop + fingering state for every new score
+    // Reset loop state for every new score
     setLoop(false); loopRef.current = false
     setScoreLoopPick(null); setScoreLoopRange(null); setScoreLoopAnchor(null)
-    setFingeringOverlays([]); setFingeringActive(false)
 
     try {
       const content = await readFile(file)
@@ -1281,10 +1276,9 @@ export default function SightReading() {
     stopPlayback()
     setError(null); setLoaded(false); setRendering(true); setUsedPcs(null)
     isMidiRef.current = true; setIsMidiFile(true)
-    // Reset loop + fingering state for every new file
+    // Reset loop state for every new file
     setLoop(false); loopRef.current = false
     setScoreLoopPick(null); setScoreLoopRange(null); setScoreLoopAnchor(null)
-    setFingeringOverlays([]); setFingeringActive(false)
 
     try {
       const buffer = await file.arrayBuffer()
@@ -1530,59 +1524,6 @@ export default function SightReading() {
     }
     setUsedPcs([...pcs])
   }
-
-  // ── Fingering generation ─────────────────────────────────────────────────
-  const runFingering = useCallback(() => {
-    if (!osmdRef.current || isMidiRef.current) return
-    setFingeringLoading(true)
-
-    // Defer to next macrotask so the loading state paints first
-    setTimeout(() => {
-      try {
-        const { rh, lh } = extractFingeringNotes(osmdRef.current)
-        const rhFingers   = generateFingering(rh, 'right')
-        const lhFingers   = generateFingering(lh, 'left')
-
-        // Convert OSMD-unit positions to screen pixels relative to sr-score-canvas
-        const div = scoreContainerRef.current
-        if (!div) { setFingeringLoading(false); return }
-        const canvasEl   = div.parentElement
-        const canvasRect = canvasEl.getBoundingClientRect()
-        const svg        = div.querySelector('svg')
-        if (!svg) { setFingeringLoading(false); return }
-        const svgRect    = svg.getBoundingClientRect()
-
-        let uip = osmdRef.current.EngravingRules?.UnitInPixels
-        if (!uip || uip <= 0) {
-          const pageW = osmdRef.current.GraphicSheet?.MusicPages?.[0]?.PositionAndShape?.Size?.width
-          uip = (pageW && svgRect.width) ? svgRect.width / pageW : 10
-        }
-        const svgOffX = svgRect.left - canvasRect.left + canvasEl.scrollLeft
-        const svgOffY = svgRect.top  - canvasRect.top  + canvasEl.scrollTop
-
-        const overlays = []
-        const addOverlays = (notes, fingers, side) => {
-          notes.forEach((note, i) => {
-            if (!note.absPos || !fingers[i]) return
-            overlays.push({
-              x:      note.absPos.x * uip + svgOffX,
-              y:      note.absPos.y * uip + svgOffY,
-              finger: fingers[i],
-              side,
-            })
-          })
-        }
-        addOverlays(rh, rhFingers, 'right')
-        addOverlays(lh, lhFingers, 'left')
-
-        setFingeringOverlays(overlays)
-        setFingeringActive(true)
-      } catch (e) {
-        console.error('Fingering error:', e)
-      }
-      setFingeringLoading(false)
-    }, 0)
-  }, [])
 
   // ── Manual key press (keyboard click) ────────────────────────────────────
   const handleKeyPress = (midi) => {
@@ -2098,34 +2039,6 @@ export default function SightReading() {
               </div>
 
 
-              {/* Fingering button — score only */}
-              {!isMidi && loaded && (
-                <button
-                  className={`sr-icon-btn sr-fingering-btn${fingeringActive ? ' active' : ''}${fingeringLoading ? ' loading' : ''}`}
-                  onClick={() => {
-                    if (fingeringActive) {
-                      setFingeringOverlays([])
-                      setFingeringActive(false)
-                    } else {
-                      runFingering()
-                    }
-                  }}
-                  title={fingeringActive ? 'Hide fingering' : 'Generate fingering'}
-                  disabled={fingeringLoading}>
-                  {fingeringLoading
-                    ? <span className="sr-fingering-spinner"/>
-                    : (
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" width="15" height="15">
-                        <path d="M18 11V6a2 2 0 0 0-4 0v5"/>
-                        <path d="M14 10V4a2 2 0 0 0-4 0v6"/>
-                        <path d="M10 10.5V6a2 2 0 0 0-4 0v8"/>
-                        <path d="M6 14a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4v-3H6v3Z"/>
-                      </svg>
-                    )
-                  }
-                </button>
-              )}
-
               {isMidi && midiMeta && (
                 <span className="sr-midi-inline">
                   {midiMeta.name} &nbsp;
@@ -2303,15 +2216,6 @@ export default function SightReading() {
               })}
             </div>
           )}
-          {/* Fingering number overlays */}
-          {fingeringActive && fingeringOverlays.map((ov, i) => (
-            <div
-              key={i}
-              className={`sr-fingering-num sr-fingering-num--${ov.side}`}
-              style={{ left: ov.x, top: ov.y }}>
-              {ov.finger}
-            </div>
-          ))}
         </div>
       </div>
 
