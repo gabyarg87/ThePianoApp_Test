@@ -351,9 +351,9 @@ export default function SightReading() {
   const [baseBpm,       setBaseBpm]       = useState(80)   // song's original BPM — never changes after load
   const [bpmDelta,      setBpmDelta]      = useState(0)    // user offset in BPM steps of 5
   const [loop,          setLoop]          = useState(false)
-  const [scoreLoopPick,   setScoreLoopPick]   = useState(null)   // null | 'start' | 'end'
-  const [scoreLoopRange,  setScoreLoopRange]   = useState(null)   // null | [from, to] both inclusive 0-based
-  const [scoreLoopAnchor, setScoreLoopAnchor]  = useState(null)   // 0-based measure idx of first pick
+  const [scoreLoopPick,    setScoreLoopPick]    = useState(null)   // null | 'start' | 'end'
+  const [scoreLoopRange,   setScoreLoopRange]   = useState(null)   // null | [from, to] both inclusive 0-based
+  const [scoreLoopAnchor,  setScoreLoopAnchor]  = useState(null)   // 0-based measure idx of first pick
   const [metronome,     setMetronome]     = useState(false)
   const [isPlaying,     setIsPlaying]     = useState(false)
   const [liveHL,        setLiveHL]        = useState([])
@@ -701,13 +701,17 @@ export default function SightReading() {
 
     playFromStepRef.current = stepIdx
 
-    // Move OSMD cursor
+    // Move OSMD cursor — suppress DOM side-effects during the walk
     const targetCursorIdx = steps[stepIdx].cursorIdx
+    const _siv = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = () => {}
+    try { osmd.cursor.hide() } catch (_) {}
     osmd.cursor.reset()
-    osmd.cursor.show()
     for (let i = 0; i < targetCursorIdx; i++) {
       try { osmd.cursor.next() } catch (_) {}
     }
+    Element.prototype.scrollIntoView = _siv
+    osmd.cursor.show()   // single scrollIntoView fires here, at the right position
 
     // If practice is active, restart from this step
     if (practiceActiveRef.current) {
@@ -915,10 +919,14 @@ export default function SightReading() {
         const targetCursorIdx = fromIdx > 0 && stepsRef.current[fromIdx]
           ? stepsRef.current[fromIdx].cursorIdx
           : 0
+        const _siv = Element.prototype.scrollIntoView
+        Element.prototype.scrollIntoView = () => {}
+        osmdRef.current?.cursor.hide()
         osmdRef.current?.cursor.reset()
         for (let i = 0; i < targetCursorIdx; i++) {
           osmdRef.current.cursor.next()
         }
+        Element.prototype.scrollIntoView = _siv
         osmdRef.current?.cursor.show()
       } catch (_) {}
     }
@@ -961,15 +969,21 @@ export default function SightReading() {
     const fromIdx  = playFromStepRef.current
     const timeBase = fromIdx > 0 ? (stepTiming[fromIdx]?.offset ?? 0) : 0
 
-    osmdRef.current.cursor.reset(); osmdRef.current.cursor.show()
+    // Pre-advance cursor to the chosen start step — hide during walk so each
+    // cursor.next() doesn't trigger SVG repaints + scrollIntoView
+    const _sivPlay = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = () => {}
+    osmdRef.current.cursor.hide()
+    osmdRef.current.cursor.reset()
     let cursorPos = 0
-    // Pre-advance cursor to the chosen start step
     if (fromIdx > 0 && seq[fromIdx]) {
       const startCursorIdx = seq[fromIdx].cursorIdx
       while (cursorPos < startCursorIdx) {
         try { osmdRef.current.cursor.next(); cursorPos++ } catch (_) {}
       }
     }
+    Element.prototype.scrollIntoView = _sivPlay
+    osmdRef.current.cursor.show()
     let activeStepTempo = seq[fromIdx]?.tempo ?? seq[0]?.tempo ?? null
     let activeMeasure   = -1   // for bar-restart metronome sync
 
@@ -1181,7 +1195,7 @@ export default function SightReading() {
     stopPlayback()
     setError(null); setLoaded(false); setRendering(true); setUsedPcs(null)
     isMidiRef.current = false; setIsMidiFile(false); setMidiMeta(null)
-    // Reset loop state so the button is clean for every new score
+    // Reset loop state for every new score
     setLoop(false); loopRef.current = false
     setScoreLoopPick(null); setScoreLoopRange(null); setScoreLoopAnchor(null)
 
@@ -1276,7 +1290,7 @@ export default function SightReading() {
     stopPlayback()
     setError(null); setLoaded(false); setRendering(true); setUsedPcs(null)
     isMidiRef.current = true; setIsMidiFile(true)
-    // Reset loop state so the button is clean for every new file
+    // Reset loop state for every new file
     setLoop(false); loopRef.current = false
     setScoreLoopPick(null); setScoreLoopRange(null); setScoreLoopAnchor(null)
 
