@@ -171,11 +171,31 @@ function autoKeyboardLayout(midiData) {
 
 
 // dynamicVelMap: { measureIndex: velocity } — built once after OSMD load.
-// Tempo comes from SourceMeasure.TempoInBPM which reads <sound tempo="X"/> directly.
-// This is the only reliable quarter-note-normalized BPM source in OSMD 1.9.7:
-//   - cursor.Iterator.CurrentBpm is broken (OSMD synthetic defaults overwrite real marks)
-//   - InstantaneousTempoExpression.TempoInBpm is not normalized for non-quarter beat units
-// For text-only scores (no <sound> element), SourceMeasure.TempoExpressions is used as fallback.
+//
+// Beat-unit → quarter-note multiplier for metronome normalization.
+// e.g. ♪=250 (eighth) → 250 × 0.5 = 125 quarter-note BPM.
+const BEAT_UNIT_FACTOR = {
+  '16th': 0.25, 'eighth': 0.5, 'quarter': 1.0,
+  'half': 2.0, 'whole': 4.0, 'breve': 8.0,
+}
+
+/**
+ * Extract the quarter-note BPM from a SourceMeasure's TempoExpressions only.
+ * Normalises metronome marks by their beat unit (e.g. ♪=250 → 125 quarter BPM).
+ * Returns 0 if no expression is found — callers handle the TempoInBPM fallback
+ * with change-detection to avoid acting on OSMD's propagated carry-forward values.
+ */
+function getExprBpm(measure) {
+  for (const te of (measure?.TempoExpressions ?? [])) {
+    const it = te.InstantaneousTempo
+    if (!it || !(it.TempoInBpm > 0)) continue
+    const factor = BEAT_UNIT_FACTOR[it.beatUnit] ?? 1.0
+    const bpm = it.TempoInBpm * factor
+    if (bpm > 0) return bpm
+  }
+  return 0
+}
+
 function extractSteps(osmd, selPartIndices, fromMeasure, toMeasure, dynamicVelMap = {}) {
   const cursor    = osmd.cursor
   const allParts  = osmd.Sheet.Parts
@@ -186,7 +206,10 @@ function extractSteps(osmd, selPartIndices, fromMeasure, toMeasure, dynamicVelMa
   // that block the main thread for several seconds on large scores.
   const _siv = Element.prototype.scrollIntoView
   Element.prototype.scrollIntoView = function () {}
-  try { cursor.hide() } catch (_) {}
+  try {
+    cursor.hide()
+  } catch (_) {}
+
   const measures  = osmd.Sheet.SourceMeasures
   const useAll    = selPartIndices.length === allParts.length
   const selSet    = new Set(selPartIndices)
@@ -197,12 +220,15 @@ function extractSteps(osmd, selPartIndices, fromMeasure, toMeasure, dynamicVelMa
   let currentVelocity = 75
   for (let m = 0; m < fromMeasure && m < measures.length; m++) {
     if (dynamicVelMap[m] !== undefined) currentVelocity = dynamicVelMap[m]
-    const soundBpm = measures[m]?.TempoInBPM ?? 0
-    if (soundBpm > 0) {
-      lastKnownBpm = soundBpm
+    const exprBpm = getExprBpm(measures[m])
+    if (exprBpm > 0) {
+      lastKnownBpm = exprBpm
     } else {
-      const exprBpm = measures[m]?.TempoExpressions?.[0]?.InstantaneousTempo?.TempoInBpm ?? 0
-      if (exprBpm > 0) lastKnownBpm = exprBpm
+      // Only use TempoInBPM when it changed — OSMD propagates the value forward to all
+      // subsequent measures, so an unchanged value means "inherited", not a new tempo mark.
+      const soundBpm    = measures[m]?.TempoInBPM ?? 0
+      const prevSoundBpm = m > 0 ? (measures[m - 1]?.TempoInBPM ?? 0) : 0
+      if (soundBpm > 0 && soundBpm !== prevSoundBpm) lastKnownBpm = soundBpm
     }
   }
 
@@ -211,86 +237,90 @@ function extractSteps(osmd, selPartIndices, fromMeasure, toMeasure, dynamicVelMa
   let ci = 0
   let lastMeasureIdx  = -1   // carry-forward: last processed measure
 
-  while (!cursor.Iterator.EndReached) {
-    const mIdx = cursor.Iterator.CurrentMeasureIndex
-    if (mIdx < fromMeasure) { cursor.next(); ci++; continue }
-    if (mIdx >= toMeasure)  break
+  try {
+    while (!cursor.Iterator.EndReached) {
+      const mIdx = cursor.Iterator.CurrentMeasureIndex
+      if (mIdx < fromMeasure) { cursor.next(); ci++; continue }
+      if (mIdx >= toMeasure)  break
 
-    if (dynamicVelMap[mIdx] !== undefined) currentVelocity = dynamicVelMap[mIdx]
+      if (dynamicVelMap[mIdx] !== undefined) currentVelocity = dynamicVelMap[mIdx]
 
-    // Update BPM once per measure boundary.
-    if (mIdx !== lastMeasureIdx) {
-      // Primary: <sound tempo="X"/> — always quarter-note normalized.
-      const soundBpm = measures[mIdx]?.TempoInBPM ?? 0
-      if (soundBpm > 0) {
-        lastKnownBpm = soundBpm
-      } else {
-        // Fallback for text-only scores (no <sound> element): read from TempoExpressions.
-        const exprBpm = measures[mIdx]?.TempoExpressions?.[0]?.InstantaneousTempo?.TempoInBpm ?? 0
-        if (exprBpm > 0) lastKnownBpm = exprBpm
-      }
-      lastMeasureIdx = mIdx
-    }
-
-    const currentTempo = lastKnownBpm > 0 ? Math.round(lastKnownBpm) : null
-
-    // noteEvents: per-note { midi, dur } so each note plays for its own duration.
-    const noteEvents = []
-
-    cursor.VoicesUnderCursor().forEach(ve => {
-      // OSMD API: VoiceEntry.IsGrace / Note.IsGraceNote (PascalCase).
-      // Grace entries can appear alongside normal ones, guard at both levels.
-      if (ve.IsGrace) return
-
-      const instr   = ve.ParentSourceStaffEntry?.ParentStaff?.ParentInstrument
-      const idx     = instr ? allParts.findIndex(p => p === instr) : 0
-      const fromSel = useAll || selSet.has(idx)
-
-      ve.Notes.forEach(note => {
-        if (note.IsGraceNote) return
-
-        const realValue = note.Length?.RealValue ?? 0.25
-        const beats     = realValue * 4
-
-        // note.Pitch can be non-null for display-positioned rests
-        if (!note.Pitch || note.isRest()) return
-        if (!fromSel) return
-
-        // Skip tied-note continuations — only attack the first note of a tie
-        const tie = note.NoteTie
-        if (tie && tie.Notes.length > 0 && tie.Notes[0] !== note) return
-
-        const midi = osmdToMidi(note.halfTone)
-        const existing = noteEvents.find(n => n.midi === midi)
-        if (!existing) {
-          noteEvents.push({ midi, dur: Math.max(0.125, beats) })
+      // Update BPM once per measure boundary.
+      if (mIdx !== lastMeasureIdx) {
+        const exprBpm = getExprBpm(measures[mIdx])
+        if (exprBpm > 0) {
+          lastKnownBpm = exprBpm
         } else {
-          // Same pitch from two voices — keep the longer duration
-          existing.dur = Math.max(existing.dur, beats)
+          // Only use TempoInBPM when it changed — OSMD propagates the value forward to all
+          // subsequent measures, so an unchanged value means "inherited", not a new tempo mark.
+          const soundBpm     = measures[mIdx]?.TempoInBPM ?? 0
+          const prevSoundBpm = mIdx > 0 ? (measures[mIdx - 1]?.TempoInBPM ?? 0) : 0
+          if (soundBpm > 0 && soundBpm !== prevSoundBpm) lastKnownBpm = soundBpm
         }
+        lastMeasureIdx = mIdx
+      }
+
+      const currentTempo = lastKnownBpm > 0 ? Math.round(lastKnownBpm) : null
+
+      // noteEvents: per-note { midi, dur } so each note plays for its own duration.
+      const noteEvents = []
+
+      cursor.VoicesUnderCursor().forEach(ve => {
+        // OSMD API: VoiceEntry.IsGrace / Note.IsGraceNote (PascalCase).
+        // Grace entries can appear alongside normal ones, guard at both levels.
+        if (ve.IsGrace) return
+
+        const instr   = ve.ParentSourceStaffEntry?.ParentStaff?.ParentInstrument
+        const idx     = instr ? allParts.findIndex(p => p === instr) : 0
+        const fromSel = useAll || selSet.has(idx)
+
+        ve.Notes.forEach(note => {
+          if (note.IsGraceNote) return
+
+          const realValue = note.Length?.RealValue ?? 0.25
+          const beats     = realValue * 4
+
+          // note.Pitch can be non-null for display-positioned rests
+          if (!note.Pitch || note.isRest()) return
+          if (!fromSel) return
+
+          // Skip tied-note continuations — only attack the first note of a tie
+          const tie = note.NoteTie
+          if (tie && tie.Notes.length > 0 && tie.Notes[0] !== note) return
+
+          const midi = osmdToMidi(note.halfTone)
+          const existing = noteEvents.find(n => n.midi === midi)
+          if (!existing) {
+            noteEvents.push({ midi, dur: Math.max(0.125, beats) })
+          } else {
+            // Same pitch from two voices — keep the longer duration
+            existing.dur = Math.max(existing.dur, beats)
+          }
+        })
       })
-    })
 
-    // Compute the actual cursor step duration from OSMD's timestamp — this is
-    // always correct even when only one staff has a note at this position and
-    // the other has a note onset partway through (e.g. bass quarter at beat 3
-    // while treble has a 16th starting at beat 3.25 — the cursor advances only
-    // 0.25 beats, not 1, but VoicesUnderCursor() only shows the bass here).
-    const tsBefore  = cursor.Iterator.currentTimeStamp?.RealValue ?? 0
-    const cursorIdx = ci
-    cursor.next()
-    ci++
-    const tsAfter   = cursor.Iterator.EndReached
-      ? tsBefore
-      : (cursor.Iterator.currentTimeStamp?.RealValue ?? tsBefore)
-    const advance   = Math.max(0.125, (tsAfter - tsBefore) * 4)
+      // Compute the actual cursor step duration from OSMD's timestamp — this is
+      // always correct even when only one staff has a note at this position and
+      // the other has a note onset partway through (e.g. bass quarter at beat 3
+      // while treble has a 16th starting at beat 3.25 — the cursor advances only
+      // 0.25 beats, not 1, but VoicesUnderCursor() only shows the bass here).
+      const tsBefore  = cursor.Iterator.currentTimeStamp?.RealValue ?? 0
+      const cursorIdx = ci
+      cursor.next()
+      ci++
+      const tsAfter   = cursor.Iterator.EndReached
+        ? tsBefore
+        : (cursor.Iterator.currentTimeStamp?.RealValue ?? tsBefore)
+      const advance   = Math.max(0.125, (tsAfter - tsBefore) * 4)
 
-    steps.push({ noteEvents, beats: advance, velocity: currentVelocity, tempo: currentTempo, measureIndex: mIdx, cursorIdx })
+      steps.push({ noteEvents, beats: advance, velocity: currentVelocity, tempo: currentTempo, measureIndex: mIdx, cursorIdx })
+    }
+  } finally {
+    cursor.reset()
+    // Restore scrollIntoView — cursor visibility is managed by callers
+    Element.prototype.scrollIntoView = _siv
   }
 
-  cursor.reset()
-  // Restore scrollIntoView — cursor visibility is managed by callers
-  Element.prototype.scrollIntoView = _siv
   return steps
 }
 
@@ -705,12 +735,15 @@ export default function SightReading() {
     const targetCursorIdx = steps[stepIdx].cursorIdx
     const _siv = Element.prototype.scrollIntoView
     Element.prototype.scrollIntoView = () => {}
-    try { osmd.cursor.hide() } catch (_) {}
-    osmd.cursor.reset()
-    for (let i = 0; i < targetCursorIdx; i++) {
-      try { osmd.cursor.next() } catch (_) {}
+    try {
+      try { osmd.cursor.hide() } catch (_) {}
+      osmd.cursor.reset()
+      for (let i = 0; i < targetCursorIdx; i++) {
+        try { osmd.cursor.next() } catch (_) {}
+      }
+    } finally {
+      Element.prototype.scrollIntoView = _siv
     }
-    Element.prototype.scrollIntoView = _siv
     osmd.cursor.show()   // single scrollIntoView fires here, at the right position
 
     // If practice is active, restart from this step
@@ -921,12 +954,15 @@ export default function SightReading() {
           : 0
         const _siv = Element.prototype.scrollIntoView
         Element.prototype.scrollIntoView = () => {}
-        osmdRef.current?.cursor.hide()
-        osmdRef.current?.cursor.reset()
-        for (let i = 0; i < targetCursorIdx; i++) {
-          osmdRef.current.cursor.next()
+        try {
+          osmdRef.current?.cursor.hide()
+          osmdRef.current?.cursor.reset()
+          for (let i = 0; i < targetCursorIdx; i++) {
+            osmdRef.current.cursor.next()
+          }
+        } finally {
+          Element.prototype.scrollIntoView = _siv
         }
-        Element.prototype.scrollIntoView = _siv
         osmdRef.current?.cursor.show()
       } catch (_) {}
     }
@@ -940,12 +976,27 @@ export default function SightReading() {
     playingRef.current = true; setIsPlaying(true)
     if (metroActiveRef.current) startMetronome()
 
+    const fromIdx = playFromStepRef.current
+
     // Pre-calculate per-step offsets and beatMs values, honouring in-score
     // tempo changes. User BPM is applied as a proportional scale so that
     // "slow down / speed up" still works across tempo changes.
-    // userScale = 1.0 when the user hasn't touched the slider.
-    const origBpm   = scoreOrigBpmRef.current || bpmRef.current
-    const userScale = bpmRef.current / origBpm
+    //
+    // userScale is computed relative to the score's tempo AT the play-start
+    // position — NOT the load-time scoreOrigBpmRef. This prevents a spurious
+    // scale when jumpToMeasure sets bpmRef to a mid-score tempo that differs
+    // from the tempo OSMD reported at load (e.g. when the first tempo expression
+    // it finds is a Larghetto later in the piece).
+    //
+    // If the user hasn't manually adjusted BPM: bpmRef == startTempo → scale = 1.0
+    // If the user slowed to 80% of a 100-BPM section: bpmRef = 80, startTempo = 100 → scale = 0.8
+    const startTempo = (() => {
+      for (let i = fromIdx; i >= 0; i--) {
+        if (seq[i]?.tempo != null) return seq[i].tempo
+      }
+      return scoreOrigBpmRef.current || bpmRef.current
+    })()
+    const userScale   = (startTempo > 0) ? bpmRef.current / startTempo : 1.0
     let currentBeatMs = (60 / bpmRef.current) * 1000
 
     // stepTiming[i] = { offset, beatMs, scaledTempo } pre-computed for every step
@@ -961,28 +1012,27 @@ export default function SightReading() {
       accOffset += step.beats * currentBeatMs
     })
 
-    // Restore user's intended BPM before computing scale — in-score tempo changes
-    // from a previous playback may have dirtied bpmRef without resetting it.
-    bpmRef.current = userBpmRef.current
+    // Update the BPM display to reflect the start position
     setBpm(userBpmRef.current)
-
-    const fromIdx  = playFromStepRef.current
     const timeBase = fromIdx > 0 ? (stepTiming[fromIdx]?.offset ?? 0) : 0
 
     // Pre-advance cursor to the chosen start step — hide during walk so each
     // cursor.next() doesn't trigger SVG repaints + scrollIntoView
+    let cursorPos = 0
     const _sivPlay = Element.prototype.scrollIntoView
     Element.prototype.scrollIntoView = () => {}
-    osmdRef.current.cursor.hide()
-    osmdRef.current.cursor.reset()
-    let cursorPos = 0
-    if (fromIdx > 0 && seq[fromIdx]) {
-      const startCursorIdx = seq[fromIdx].cursorIdx
-      while (cursorPos < startCursorIdx) {
-        try { osmdRef.current.cursor.next(); cursorPos++ } catch (_) {}
+    try {
+      osmdRef.current.cursor.hide()
+      osmdRef.current.cursor.reset()
+      if (fromIdx > 0 && seq[fromIdx]) {
+        const startCursorIdx = seq[fromIdx].cursorIdx
+        while (cursorPos < startCursorIdx) {
+          try { osmdRef.current.cursor.next(); cursorPos++ } catch (_) {}
+        }
       }
+    } finally {
+      Element.prototype.scrollIntoView = _sivPlay
     }
-    Element.prototype.scrollIntoView = _sivPlay
     osmdRef.current.cursor.show()
     let activeStepTempo = seq[fromIdx]?.tempo ?? seq[0]?.tempo ?? null
     let activeMeasure   = -1   // for bar-restart metronome sync
