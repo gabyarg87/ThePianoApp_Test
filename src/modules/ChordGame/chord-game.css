@@ -1,0 +1,297 @@
+/* ── Layout ────────────────────────────────────────────────────────── */
+.cg-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 10px;
+  overflow: hidden;
+}
+
+/* ── Settings bar ──────────────────────────────────────────────────── */
+.cg-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  flex-shrink: 0;
+}
+
+.cg-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+/* Root note row */
+.cg-roots-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+
+.cg-settings-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cg-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: var(--text-dim);
+  margin-right: 2px;
+}
+
+.cg-pill {
+  padding: 5px 13px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  transition: background .15s, color .15s, box-shadow .15s;
+  cursor: pointer;
+}
+.cg-pill:hover { background: rgba(255,255,255,0.09); color: var(--text); }
+.cg-pill.on {
+  background: linear-gradient(135deg, rgba(124,92,255,0.28), rgba(34,211,238,0.18));
+  box-shadow: inset 0 0 0 1px rgba(124,92,255,0.5);
+  color: var(--text);
+}
+
+/* Smaller root-note pills */
+.cg-pill-sm {
+  padding: 3px 9px;
+  font-size: 11px;
+}
+
+/* Sharp root notes: slightly different base tint */
+.cg-root-pill.sharp {
+  background: rgba(255,255,255,0.03);
+  color: var(--text-dim);
+}
+.cg-root-pill.sharp.on {
+  background: linear-gradient(135deg, rgba(167,139,250,0.3), rgba(124,92,255,0.2));
+  box-shadow: inset 0 0 0 1px rgba(167,139,250,0.5);
+  color: #e9d5ff;
+}
+
+.cg-score-box {
+  margin-left: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.cg-score-num { font-size: 24px; font-weight: 800; color: var(--text); }
+.cg-score-lbl { font-size: 11px; font-weight: 600; color: var(--text-dim); }
+.cg-streak    { font-size: 14px; font-weight: 700; color: #f59e0b; margin-left: 4px; }
+
+/* ── Game area ─────────────────────────────────────────────────────── */
+.cg-game {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Idle state */
+.cg-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+  max-width: 420px;
+}
+.cg-idle-emoji { font-size: 56px; line-height: 1; }
+.cg-idle-title {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text);
+  margin: 0;
+}
+.cg-idle-sub {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.cg-btn-start {
+  margin-top: 8px;
+  padding: 13px 40px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent, #7c5cff), var(--accent-2, #22d3ee));
+  color: #0b0f1a;
+  transition: opacity .2s, transform .15s;
+  cursor: pointer;
+}
+.cg-btn-start:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px) scale(1.02); }
+.cg-btn-start:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Playing state */
+.cg-playing {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 14px;
+  width: 100%;
+  height: 100%;
+}
+
+/* Left column: chord card + label + notation */
+.cg-playing-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Chord card */
+.cg-chord-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 22px 52px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  min-width: 220px;
+  transition: background .3s, box-shadow .3s;
+}
+.cg-chord-card.pending {
+  border-color: rgba(255,255,255,0.15);
+}
+.cg-chord-card.playing {
+  box-shadow: 0 0 0 2px rgba(124,92,255,0.35);
+}
+.cg-chord-card.correct {
+  background: rgba(34,197,94,0.14);
+  box-shadow: 0 0 0 2px rgba(34,197,94,0.55), 0 0 32px rgba(34,197,94,0.2);
+}
+.cg-chord-card.timeout {
+  background: rgba(239,68,68,0.12);
+  box-shadow: 0 0 0 2px rgba(239,68,68,0.45);
+}
+
+.cg-chord-name {
+  font-size: 58px;
+  font-weight: 900;
+  color: var(--text);
+  letter-spacing: -2px;
+  line-height: 1;
+}
+.cg-chord-type {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+}
+
+/* Timer / points bar — vertical, right side */
+.cg-timer-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 28px;
+  flex-shrink: 0;
+}
+.cg-pts-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim);
+  letter-spacing: 0.3px;
+}
+.cg-bar-track {
+  width: 12px;
+  flex: 1;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  position: relative;
+  overflow: hidden;
+}
+.cg-bar-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  border-radius: 999px;
+}
+
+/* Musical staff */
+.cg-notation {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 0;
+  max-height: 160px;
+}
+.cg-staff-svg { overflow: visible; display: block; }
+
+/* Next / retry button */
+.cg-btn-next {
+  padding: 10px 30px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 700;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid var(--border);
+  color: var(--text);
+  transition: background .15s, transform .1s;
+  cursor: pointer;
+}
+.cg-btn-next:hover { background: rgba(255,255,255,0.13); transform: translateY(-1px); }
+
+/* ── Piano roll ────────────────────────────────────────────────────── */
+.cg-piano-section {
+  flex-shrink: 0;
+  padding: 10px 14px 12px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cg-piano-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cg-piano-outer {
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.15) transparent;
+}
+.cg-piano-svg { display: block; }
