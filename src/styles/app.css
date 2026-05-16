@@ -28,33 +28,40 @@
 }
 .brand-name { font-weight: 700; letter-spacing: 0.2px; }
 
+/* ── Nav bar ──────────────────────────────────────────────────────────── */
 .module-tabs {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(110px, 1fr);
-  gap: 8px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  padding: 4px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 3px;
   background: rgba(255,255,255,0.03);
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-.module-tabs::-webkit-scrollbar { display: none; }
 
+.module-tabs-spacer { flex: 1; }
+
+/* ~25% shorter than original: row layout, reduced padding & min-height */
 .module-tab {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 4px;
-  padding: 10px 8px;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
   border-radius: var(--radius-sm);
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   transition: background .2s, color .2s, transform .15s;
-  min-height: 56px;
+  min-height: 42px;
+  white-space: nowrap;
+}
+.module-tab:hover:not(:disabled) {
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
 }
 .module-tab:active:not(:disabled) { transform: scale(0.97); }
 .module-tab.active {
@@ -62,11 +69,11 @@
   background: linear-gradient(135deg, rgba(124,92,255,0.25), rgba(34,211,238,0.15));
   box-shadow: inset 0 0 0 1px rgba(124,92,255,0.4);
 }
-.tab-icon { font-size: 18px; }
+.tab-icon { font-size: 15px; line-height: 1; }
 .tab-soon {
-  position: absolute; top: 4px; right: 6px;
+  position: absolute; top: 3px; right: 5px;
   font-size: 9px;
-  padding: 2px 5px;
+  padding: 1px 4px;
   border-radius: 999px;
   background: var(--bg-3);
   color: var(--text-dim);
@@ -75,4 +82,137 @@
   text-transform: uppercase;
 }
 
+/* MODES button */
+.modes-btn {
+  background: linear-gradient(135deg, rgba(124,92,255,0.18), rgba(34,211,238,0.1));
+  box-shadow: inset 0 0 0 1px rgba(124,92,255,0.35);
+  color: var(--text);
+}
+.modes-btn:hover { background: linear-gradient(135deg, rgba(124,92,255,0.28), rgba(34,211,238,0.18)); }
+
+/* Active mode pill shown next to MODES button */
+.active-mode-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, rgba(124,92,255,0.25), rgba(34,211,238,0.15));
+  box-shadow: inset 0 0 0 1px rgba(124,92,255,0.4);
+  white-space: nowrap;
+}
+.active-mode-icon { font-size: 14px; line-height: 1; }
+.active-mode-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.2px;
+}
+
+/* ── Modes modal ──────────────────────────────────────────────────────── */
+.modes-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0,0,0,0.65);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modes-modal {
+  background: var(--bg-1, #141824);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.6);
+  padding: 32px 28px 24px;
+  width: min(480px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.modes-modal-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
+  margin: 0;
+  letter-spacing: 0.3px;
+}
+
+.modes-modal-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modes-card {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  text-align: left;
+  transition: background .15s, box-shadow .15s, transform .1s;
+  color: var(--text-dim);
+}
+.modes-card:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+.modes-card.active {
+  background: linear-gradient(135deg, rgba(124,92,255,0.22), rgba(34,211,238,0.12));
+  box-shadow: inset 0 0 0 1px rgba(124,92,255,0.5);
+  color: var(--text);
+}
+.modes-card-icon {
+  font-size: 28px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.modes-card-name {
+  font-size: 15px;
+  font-weight: 700;
+  display: block;
+  margin-bottom: 3px;
+  color: var(--text);
+}
+.modes-card-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  display: block;
+  line-height: 1.4;
+}
+.modes-card-check {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--accent, #7c5cff);
+}
+
+.modes-modal-close {
+  align-self: center;
+  padding: 8px 24px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: rgba(255,255,255,0.06);
+  transition: background .15s, color .15s;
+}
+.modes-modal-close:hover {
+  background: rgba(255,255,255,0.12);
+  color: var(--text);
+}
+
+/* ── Main content ─────────────────────────────────────────────────────── */
 .app-main { flex: 1; min-height: 0; }
